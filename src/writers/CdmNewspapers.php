@@ -49,6 +49,12 @@ class CdmNewspapers extends Writer
     public $metadataParser;
 
     /**
+     * @var array $nickname_ocr - ordered list of nicknames
+     * which may contain ocr text. The first one found will be used.
+     */
+    public $ocrNicknames = array('full', 'fullte');
+
+    /**
      * Create a new newspaper writer Instance
      * @param array $settings configuration settings.
      */
@@ -65,6 +71,10 @@ class CdmNewspapers extends Writer
             $this->metadataFileName = $this->settings['metadata_filename'];
         } else {
             $this->metadataFileName = 'MODS.xml';
+        }
+
+        if (isset($this->settings['WRITER']['ocr_nickname'])) {
+            array_unshift($this->ocrNicknames, $this->settings['WRITER']['ocr_nickname']);
         }
 
         // If OBJ_file_extension was not set in the configuration, default to tiff.
@@ -127,8 +137,8 @@ class CdmNewspapers extends Writer
             // Create subdirectory for each page of newspaper issue
             $page_object_info = $this->fetcher->getItemInfo($page_pointer);
 
-            if ($OBJ_expected xor $no_datastreams_setting_flag) {
-                $filekey = $sub_dir_num - 1;
+            $filekey = $sub_dir_num - 1;
+            if (!empty($OBJFilesArray[$filekey]) && ($OBJ_expected xor $no_datastreams_setting_flag)) {
                 $pathToFile = $OBJFilesArray[$filekey];
                 // Infer the numbered directory name from the OBJ file name.
                 $directoryNumber = $this->directoryNameFromFileName($pathToFile);
@@ -153,16 +163,19 @@ class CdmNewspapers extends Writer
             print "Exporting files for issue " . $this->issueDate
               . ', page ' . $directoryNumber . "\n";
 
-            // Write out $page_object_info['full'], which we'll use as the OCR datastream.
-            $ocr_output_file_path = $page_dir . DIRECTORY_SEPARATOR . 'OCR.txt';
+            // Write out the OCR datastream.
             $OCR_expected = in_array('OCR', $this->datastreams);
             if ($OCR_expected xor $no_datastreams_setting_flag) {
                 $ocr_output_file_path = $page_dir . DIRECTORY_SEPARATOR . 'OCR.txt';
-                if (isset($page_object_info['full'])) {
-                    file_put_contents($ocr_output_file_path, $page_object_info['full']);
-                } elseif (isset($page_object_info['fullte'])) {
-                    file_put_contents($ocr_output_file_path, $page_object_info['fullte']);
-                } else {
+                $ocr_nickname_found = FALSE;
+                foreach ($this->ocrNicknames as $ocrNickname) {
+                    if (isset($page_object_info[$ocrNickname])) {
+                        file_put_contents($ocr_output_file_path, $page_object_info[$ocrNickname]);
+                        $ocr_nickname_found = TRUE;
+                        break;
+                    }
+                }
+                if (!$ocr_nickname_found) {
                     throw new \Exception("Problem creating OCR.txt.  Possibly unknown Cdm nickname.");
                 }
             }
@@ -211,7 +224,7 @@ class CdmNewspapers extends Writer
             }
 
             $OBJ_expected = in_array('OBJ', $this->datastreams);
-            if ($OBJ_expected xor $no_datastreams_setting_flag) {
+            if (!empty($pathToFile) && ($OBJ_expected xor $no_datastreams_setting_flag)) {
                 // OBJ from source files - either TIFF, jpeg, or jp2
                 $pathToPageOK = $this->cdmNewspapersFileGetter
                    ->checkNewspaperPageFilePath($pathToFile, $directoryNumber);
@@ -223,7 +236,7 @@ class CdmNewspapers extends Writer
                 } else {
                     // if the path to the page is NOT OK, throw an exception
                     throw new \Exception("The path $pathToFile for the OBJ file for page $directoryNumber" .
-                        "did not pass the check.");
+                      "did not pass the check.");
                 }
             } elseif (!$this->skip_obj) {
                 // The OBJ datastream is required:
@@ -234,17 +247,35 @@ class CdmNewspapers extends Writer
                 // in the WRITER section of the configuration file or do not include datastreams[] option to create
                 // all datastreams
                 // MODS, OBJ, OCR, JPEG, JP2
-                if ($JP2_expected) {
+                if (!empty($jp2_output_file_path)) {
+                    print "Source file not found. Using JP2.\n";
                     $obj_jp2_output_file_path = $page_dir . DIRECTORY_SEPARATOR . 'OBJ.jp2';
                     copy($jp2_output_file_path, $obj_jp2_output_file_path);
                 } elseif ($JPEG_expected) {
+                    print "Source file not found. Using JPG.\n";
                     $obj_jpeg_output_file_path = $page_dir . DIRECTORY_SEPARATOR . 'OBJ.jpg';
                     copy($jpg_output_file_path, $obj_jpeg_output_file_path);
-                } else {
-                    // Create an exception since OJB are required in Islandora Book packages.
-                    throw new \Exception("OBJ datastream is required - no OBJ datastream created.  Please " .
-                        "check your configuration.");
                 }
+                else {
+                    print "Source file not found. Attempting to pull from ContentDM.\n";
+                    try {
+                        $temp_file_path = $this->cdmNewspapersFileGetter->cdmSingleFileGetter->getFileContent($page_pointer);
+                        // Get the filename used by CONTENTdm (stored in the 'find' field)
+                        // so we can grab the extension.
+                        $item_info = $this->fetcher->getItemInfo($page_pointer);
+                        $source_file_extension = pathinfo($item_info['find'], PATHINFO_EXTENSION);
+                        $output_file_path = $page_dir . DIRECTORY_SEPARATOR . 'OBJ' . '.' . $source_file_extension;
+                        rename($temp_file_path, $output_file_path);
+                    }
+                    catch (Exception $e) {
+                        $this->log->addError(
+                          "CdmNewspapers writer error",
+                          array('Error writing page content file' => $e->getMessage())
+                        );
+                        print "Source file download from ContentDM failed.\n";
+                    }
+                }
+
             }
 
             // Write outut page level MODS.XML
@@ -299,6 +330,7 @@ class CdmNewspapers extends Writer
         // use the one with keyDate and metadataminipulator to
         // manipulate date to yyyy-mm-dd format.
         if ($nodes->length == 1) {
+
             $this->issueDate = trim($nodes->item(0)->nodeValue);
         } else {
             foreach ($nodes as $item) {
@@ -310,6 +342,18 @@ class CdmNewspapers extends Writer
             }
         }
 
+
+        $issueDateTime = strtotime($this->issueDate);
+        if ($issueDateTime) {
+            $this->issueDate = date('Y-m-d', $issueDateTime);
+        }
+        else {
+            $parsed_date = array_intersect_key(date_parse($this->issueDate), array('year' => 1, 'month' => 1, 'day' => 1));
+            if(count($parsed_date > 0)) {
+                array_walk($parsed_date, array($this, 'pad_date_fields'));
+                $this->issueDate = implode('-', $parsed_date);
+            }
+        }
         $issueObjectPath = $this->outputDirectory . DIRECTORY_SEPARATOR . $this->issueDate;
 
         // if the issue level directory already exists, we are dealing with a possible
@@ -432,4 +476,9 @@ class CdmNewspapers extends Writer
             }
         }
     }
+
+    private function pad_date_fields(&$item1) {
+        $item1 = str_pad($item1, 2, '0', STR_PAD_LEFT);
+    }
+
 }

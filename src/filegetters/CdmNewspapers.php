@@ -19,6 +19,19 @@ class CdmNewspapers extends FileGetter
     public $inputDirectories;
 
     /**
+     * @var string $issueDateRegex - regex to find issue date from file path.
+     * If three match groups are included in the regex string, they will be
+     * used as the year, month, and day of month (YYYY, MM, DD).
+     */
+    public $issueDateRegex = '(\\d{4})[-_: ]?(\\d{2})[-_: ]?(\\d{2})';
+
+    /**
+     * @var object cdmSingleFileGetter - filegetter class for
+     * getting files related to CDM single file objects.
+     */
+    public $cdmSingleFileGetter;
+
+    /**
      * @var array (dict) $OBJFilePaths - paths to OBJ files for collection
      */
     public $OBJFilePaths;
@@ -77,6 +90,13 @@ class CdmNewspapers extends FileGetter
         if (isset($this->settings['allowed_file_extensions_for_OBJ'])) {
             $this->allowed_file_extensions_for_OBJ = $this->settings['allowed_file_extensions_for_OBJ'];
         }
+
+        if(!empty($this->settings['issue_date_regex'])) {
+            $this->issueDateRegex = $this->settings['issue_date_regex'];
+        }
+
+        $this->cdmSingleFileGetterSettings = $settings;
+        $this->cdmSingleFileGetter = new \mik\filegetters\CdmSingleFile($this->cdmSingleFileGetterSettings);
 
         $this->inputDirectories = $this->settings['input_directories'];
 
@@ -153,9 +173,20 @@ class CdmNewspapers extends FileGetter
         // Get the paths to the master files (typically .TIFFs)
         // to use for the OBJ.tiff of each newspaper page.
         // Deal on an issue-by-issue bassis.
+        preg_match("/" . $this->issueDateRegex . "/", $issueDate, $matches);
+        if(count($matches > 1)) {
+            array_shift($matches);
+            $issueDate = implode('', $matches);
+        }
 
         $key = DIRECTORY_SEPARATOR . $issueDate . DIRECTORY_SEPARATOR;
-        return $this->OBJFilePaths[$key];
+        if (!empty($this->OBJFilePaths[$key])) {
+            return $this->OBJFilePaths[$key];
+        }
+        else {
+            $this->log->addWarning("CdmNewspapers filegetter", array('getIssueLocalFilesForOBJ' => 'No object files path found for ' . $key));
+            return array();
+        }
     }
 
     private function getMasterFiles($inputDirectories, $allowedFileTypes)
@@ -194,14 +225,17 @@ class CdmNewspapers extends FileGetter
         # represents the issue date for the newspaper.
         # Assumes publication frequency of at most one issue daily.
         # One can use \d character class for digits 0-9
-        $regex_pattern = '%[/\\\\][0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9][/\\\\]%';
+//        $regex_pattern = '%[/\\\\][0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9][/\\\\]%';
+        $regex_pattern = '%[/\\\\][a-zA-Z_\\-\\s0-9\\.]*' . $this->issueDateRegex . '\\.*[/\\\\]%';
 
         $dateForIdentifierArray = array();
         foreach ($arrayOfFilesToPreserve as $path) {
             //print $path . "\n";
             preg_match($regex_pattern, $path, $matches);
-            if ($matches) {
-                array_push($dateForIdentifierArray, $matches[0]);
+            if ($matches && count($matches) > 1) {
+                array_shift($matches);
+                $dateIdentifier = '/' . implode('', $matches) . '/';
+                array_push($dateForIdentifierArray, $dateIdentifier);
             }
         }
         $dateForIdentifierArray = array_unique($dateForIdentifierArray);
@@ -343,7 +377,7 @@ class CdmNewspapers extends FileGetter
         // @ToDo - move this method to FileGetter parent class
         // to be extended in child classes such as CdmNewspapers
 
-        $regex_pattern = '%[/\\\\][0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9]*' . $page_number . '%';
+        $regex_pattern = '%[/\\\\][a-zA-Z_\\-\\s0-9\\.]*' . $this->issueDateRegex . '*' . $page_number . '%';
         $result = preg_match($regex_pattern, $pathToFile);
         if ($result === 1) {
             return true;
