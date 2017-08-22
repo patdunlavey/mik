@@ -225,11 +225,25 @@ class CdmBooks extends FileGetter
         // Retrieve the file associated with the child-level object. In the case of
         // the Chinese Times and some other newspapers, this is a JPEG2000 file.
         $get_file_url = $this->utilsUrl .'getfile/collection/'
-            . $this->alias . '/id/' . $page_pointer . '/filename/'
-            . $page_object_info['find'];
-        $content = file_get_contents($get_file_url);
+          . $this->alias . '/id/' . $page_pointer . '/filename/'
+          . $page_object_info['find'];
 
-        return $content;
+        $client = new Client();
+        try {
+            $response = $client->get(
+              $get_file_url,
+              ['timeout' => $this->settings['http_timeout'],
+                'connect_timeout' => $this->settings['http_timeout'],
+                'verify' => $this->verifyCA]
+            );
+            $content = $response->getBody();
+            return $content;
+        } catch (RequestException $e) {
+            $this->log->addError("CdmNewspapers Guzzle error", array('HTTP request error' => $e->getRequest()));
+            if ($e->hasResponse()) {
+                $this->log->addError("CdmNewspapers Guzzle error", array('HTTP request response' => $e->getResponse()));
+            }
+        }
     }
 
     public function getPageOBJfileContent($pathToFile, $page_number)
