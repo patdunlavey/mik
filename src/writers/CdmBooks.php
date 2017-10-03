@@ -49,6 +49,17 @@ class CdmBooks extends Writer
     public $metadataParser;
 
     /**
+     * @var array $nickname_ocr - ordered list of nicknames
+     * which may contain ocr text. The first one found will be used.
+     */
+    public $ocrNicknames = array('full', 'summar');
+
+    /**
+     * @var boolean $serialPageNumbers - Whether pages should be numbered in the order received.
+     */
+    public $serialPageNumbers = 0;
+
+    /**
      * Create a new newspaper writer Instance
      * @param array $settings configuration settings.
      */
@@ -65,6 +76,14 @@ class CdmBooks extends Writer
             $this->metadataFileName = $this->settings['metadata_filename'];
         } else {
             $this->metadataFileName = 'MODS.xml';
+        }
+
+        if (isset($this->settings['WRITER']['ocr_nickname'])) {
+            array_unshift($this->ocrNicknames, $this->settings['WRITER']['ocr_nickname']);
+        }
+
+        if (isset($this->settings['WRITER']['serial_page_numbering'])) {
+            $this->serialPageNumbers = $this->settings['WRITER']['serial_page_numbering'];
         }
 
         // If OBJ_file_extension was not set in the configuration, default to tiff.
@@ -127,18 +146,28 @@ class CdmBooks extends Writer
             // Create subdirectory for each page of newspaper issue
             $page_object_info = $this->fetcher->getItemInfo($page_pointer);
 
-            //var_dump($page_object_info);
+            if (isset($page_object_info['code']) && $page_object_info['code'] == '-2') {
 
-            if ($OBJ_expected xor $no_datastreams_setting_flag) {
-                $filekey = $sub_dir_num - 1;
+                continue;
+            }
+
+            $filekey = $sub_dir_num - 1;
+
+            if (!empty($OBJFilesArray[$filekey]) && ($OBJ_expected xor $no_datastreams_setting_flag)) {
                 $pathToFile = $OBJFilesArray[$filekey];
+            }
 
+            if($this->serialPageNumbers) {
+                $directoryNumber = $sub_dir_num;
+            }
+            elseif (!empty($pathToFile)) {
                 // Infer the numbered directory name from the OBJ file name.
                 $directoryNumber = $this->directoryNameFromFileName($pathToFile);
             } else {
                 // Infer the numbered directory name from  $page_object_info
                 $directoryNumber = $this->directoryNameFromPageObjectInfo($pagePtrPageTitleMap, $page_object_info);
             }
+
 
             // left trim leading left zero padded numbers
             $directoryNumber = ltrim($directoryNumber, "0");
@@ -150,38 +179,46 @@ class CdmBooks extends Writer
             }
 
             $page_dir = $issueObjectPath  . DIRECTORY_SEPARATOR . $directoryNumber;
+
+            $page_title = $this->pageTitleFromPageObjectInfo($pagePtrPageTitleMap, $page_object_info);
+
             //var_dump($page_dir);
             // Create a directory for each day of the newspaper.
             if (!file_exists($page_dir)) {
                 mkdir($page_dir, 0777, true);
             }
 
-            if (isset($page_object_info['code']) && $page_object_info['code'] == '-2') {
-                continue;
-            }
 
             print "Exporting files for book " . $record_key
-              . ', page ' . $directoryNumber . "\n";
+              . ', ' . $page_title . "\n";
 
-
-
-            // Write out $page_object_info['full'], which we'll use as the OCR datastream.
-            $ocr_output_file_path = $page_dir . DIRECTORY_SEPARATOR . 'OCR.txt';
+            // Write out the OCR datastream.
             $OCR_expected = in_array('OCR', $this->datastreams);
             if ($OCR_expected xor $no_datastreams_setting_flag) {
                 $ocr_output_file_path = $page_dir . DIRECTORY_SEPARATOR . 'OCR.txt';
-                if (isset($page_object_info['full'])) {
-                    $ocr = $page_object_info['full'];
-                } elseif (isset($page_object_info['summar'])) {
-                    $ocr = $page_object_info['summar'];
+                $ocr_nickname_found = FALSE;
+                foreach ($this->ocrNicknames as $ocrNickname) {
+                    if (isset($page_object_info[$ocrNickname])) {
+                        file_put_contents($ocr_output_file_path, $page_object_info[$ocrNickname]);
+                        $ocr_nickname_found = TRUE;
+                        break;
+                    }
                 }
-                file_put_contents($ocr_output_file_path, $ocr);
+                if (!$ocr_nickname_found) {
+                    $this->log->addNotice(
+                      "CdmNewspapers writer notice",
+                      array('OCR was expected, but none found.  Possibly unknown Cdm nickname.' => array('ocr_nicknames' => $this->ocrNicknames))
+                    );
+                }
             }
 
-            // Retrieve the file associated with the child-level object. In the case of
-            // the Chinese Times and some other newspapers, this is a JPEG2000 file.
+            // Get the filename used by CONTENTdm (stored in the 'find' field)
+            // so we can grab the extension.
+            $source_file_extension = strtoupper(pathinfo($page_object_info['find'], PATHINFO_EXTENSION));
+
+            // Retrieve the file associated with the child-level object.
             $JP2_expected = in_array('JP2', $this->datastreams);
-            if ($JP2_expected xor $no_datastreams_setting_flag) {
+            if ($source_file_extension == 'JP2' && ($JP2_expected xor $no_datastreams_setting_flag)) {
                 $jp2_content = $this->cdmNewspapersFileGetter
                     ->getChildLevelFileContent($page_pointer, $page_object_info);
                 $jp2_output_file_path = $page_dir . DIRECTORY_SEPARATOR . 'JP2.jp2';
@@ -201,13 +238,15 @@ class CdmBooks extends Writer
             if ($TN_expected xor $no_datastreams_setting_flag) {
                 $thumbnail_content = $this->cdmNewspapersFileGetter
                                       ->getThumbnailcontent($page_pointer);
-                $thumbnail_output_file_path = $page_dir . DIRECTORY_SEPARATOR .'TN.jpg';
-                file_put_contents($thumbnail_output_file_path, $thumbnail_content);
-                if ($sub_dir_num == 1) {
-                    // Use the first thumbnail for the first page as thumbnail for the
-                    // entire newspaper issue.
-                    $book_thumbnail_path = $issueObjectPath  . DIRECTORY_SEPARATOR . 'TN.jpg';
-                    copy($thumbnail_output_file_path, $book_thumbnail_path);
+                if(!empty($thumbnail_content)) {
+                    $thumbnail_output_file_path = $page_dir . DIRECTORY_SEPARATOR .'TN.jpg';
+                    file_put_contents($thumbnail_output_file_path, $thumbnail_content);
+                    if ($sub_dir_num == 1) {
+                        // Use the first thumbnail for the first page as thumbnail for the
+                        // entire newspaper issue.
+                        $book_thumbnail_path = $issueObjectPath  . DIRECTORY_SEPARATOR . 'TN.jpg';
+                        copy($thumbnail_output_file_path, $book_thumbnail_path);
+                    }
                 }
             }
 
@@ -217,12 +256,14 @@ class CdmBooks extends Writer
             if ($JPEG_expected xor $no_datastreams_setting_flag) {
                 $jpg_content = $this->cdmNewspapersFileGetter
                                 ->getPreviewJPGContent($page_pointer);
-                $jpg_output_file_path = $page_dir . DIRECTORY_SEPARATOR . 'JPEG.jpg';
-                file_put_contents($jpg_output_file_path, $jpg_content);
+                if(!empty($jpg_content)) {
+                    $jpg_output_file_path = $page_dir . DIRECTORY_SEPARATOR . 'JPEG.jpg';
+                    file_put_contents($jpg_output_file_path, $jpg_content);
+                }
             }
 
             $OBJ_expected = in_array('OBJ', $this->datastreams);
-            if ($OBJ_expected xor $no_datastreams_setting_flag) {
+            if (!empty($pathToFile) && ($OBJ_expected xor $no_datastreams_setting_flag)) {
                 // OBJ from source files - either TIFF, jpeg, or jp2
                 $pathToPageOK = $this->cdmNewspapersFileGetter
                    ->checkBookPageFilePath($pathToFile, $sub_dir_num);
@@ -231,6 +272,14 @@ class CdmBooks extends Writer
                     $obj_output_file_path = $page_dir . DIRECTORY_SEPARATOR . 'OBJ.' . $this->OBJ_file_extension;
                     // assumes that the source destination is on a l
                     copy($pathToFile, $obj_output_file_path);
+                } else {
+                    $msg = "The path $pathToFile for the OBJ file for page $directoryNumber" .
+                      "did not pass the check.";
+                    $this->log->addError(
+                      "CdmBooks writer error",
+                      array($msg => '')
+                    );
+                    print "$msg\n";
                 }
             } elseif (!$this->skip_obj) {
                 // The OBJ datastream is required:
@@ -240,30 +289,36 @@ class CdmBooks extends Writer
                 // in the WRITER section of the configuration file or do not include datastreams[] option to create
                 // all datastreams
                 // MODS, OBJ, OCR, JPEG, JP2
-                if ($JP2_expected) {
+                if (!empty($jp2_output_file_path)) {
+                    print "Source file not found. Using JP2.\n";
                     $obj_jp2_output_file_path = $page_dir . DIRECTORY_SEPARATOR . 'OBJ.jp2';
                     copy($jp2_output_file_path, $obj_jp2_output_file_path);
-                } elseif ($JPEG_expected) {
+                } elseif (!empty($jpg_output_file_path)) {
+                    print "Source file not found. Using JPG.\n";
                     $obj_jpeg_output_file_path = $page_dir . DIRECTORY_SEPARATOR . 'OBJ.jpg';
                     copy($jpg_output_file_path, $obj_jpeg_output_file_path);
-                } else {
-                    // Create an exception since OJB are required in Islandora Book packages.
-                    throw new \Exception("OBJ datastream is required - no OBJ datastream created.  Please " .
-                        "check your configuration.");
                 }
+                else {
+                    print "Source file not found. Attempting to pull from ContentDM.\n";
+                    try {
+                        $temp_file_path = $this->cdmNewspapersFileGetter->cdmSingleFileGetter->getFileContent($page_pointer);
+                        $output_file_path = $page_dir . DIRECTORY_SEPARATOR . 'OBJ' . '.' . $source_file_extension;
+                        rename($temp_file_path, $output_file_path);
+                    }
+                    catch (Exception $e) {
+                        $this->log->addError(
+                          "CdmBooks writer error",
+                          array('Error writing page content file' => $e->getMessage())
+                        );
+                        print "Source file download from ContentDM failed.\n";
+                    }
+                }
+
             }
 
             // Write outut page level MODS.XML
             $MODS_expected = in_array('MODS', $this->datastreams);
             if ($MODS_expected xor $no_datastreams_setting_flag) {
-                /*
-                if(isset($page_object_info['title'])) {
-                    $page_title = $page_object_info['title'];
-                } else {
-                    $page_title = 'Page ' . $directoryNumber;
-                }
-                */
-                $page_title = 'Page ' . $directoryNumber;
                 $this->writePageLevelMetadaFile($page_pointer, $page_title, $page_dir);
             }
         }
@@ -290,7 +345,6 @@ class CdmBooks extends Writer
      */
     public function directoryNameFromPageObjectInfo($pagePtrPageTitleMap, $page_object_info)
     {
-
         $pageptr = $page_object_info['dmrecord'];
         $pagetitle = $pagePtrPageTitleMap[$pageptr];
         // Page 312
@@ -298,6 +352,20 @@ class CdmBooks extends Writer
         preg_match($regex, $pagetitle, $matches);
         $pageNumber = ltrim($matches[0]);
         return $pageNumber;
+    }
+
+    /**
+     * Infer the number name for the book page subdirectory from the page_object_info metadata
+     */
+    public function pageTitleFromPageObjectInfo($pagePtrPageTitleMap, $page_object_info)
+    {
+        if (empty($page_object_info['dmrecord']))
+        {
+            print_r(array('page_object_info' => $page_object_info));
+        }
+        $pageptr = $page_object_info['dmrecord'];
+        $pagetitle = $pagePtrPageTitleMap[$pageptr];
+        return $pagetitle;
     }
 
     /**

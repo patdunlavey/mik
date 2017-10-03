@@ -33,6 +33,8 @@ class CdmNewspapers extends Writer
      */
     public $issueDate = '0000-00-00';
 
+    public $issue_date_field;
+
     /**
      * @var $alias - collection alias
      */
@@ -55,6 +57,11 @@ class CdmNewspapers extends Writer
     public $ocrNicknames = array('full', 'fullte');
 
     /**
+     * @var boolean $serialPageNumbers - Whether pages should be numbered in the order received.
+     */
+    public $serialPageNumbers = 0;
+
+    /**
      * Create a new newspaper writer Instance
      * @param array $settings configuration settings.
      */
@@ -75,6 +82,13 @@ class CdmNewspapers extends Writer
 
         if (isset($this->settings['WRITER']['ocr_nickname'])) {
             array_unshift($this->ocrNicknames, $this->settings['WRITER']['ocr_nickname']);
+        }
+
+        if (isset($this->settings['WRITER']['serial_page_numbering'])) {
+            $this->serialPageNumbers = $this->settings['WRITER']['serial_page_numbering'];
+        }
+        if (isset($this->settings['WRITER']['issue_date_field'])) {
+            $this->issue_date_field = $this->settings['WRITER']['issue_date_field'];
         }
 
         // If OBJ_file_extension was not set in the configuration, default to tiff.
@@ -138,8 +152,15 @@ class CdmNewspapers extends Writer
             $page_object_info = $this->fetcher->getItemInfo($page_pointer);
 
             $filekey = $sub_dir_num - 1;
+
             if (!empty($OBJFilesArray[$filekey]) && ($OBJ_expected xor $no_datastreams_setting_flag)) {
                 $pathToFile = $OBJFilesArray[$filekey];
+            }
+
+            if($this->serialPageNumbers) {
+                $directoryNumber = $sub_dir_num;
+            }
+            elseif (!empty($pathToFile)) {
                 // Infer the numbered directory name from the OBJ file name.
                 $directoryNumber = $this->directoryNameFromFileName($pathToFile);
             } else {
@@ -151,6 +172,13 @@ class CdmNewspapers extends Writer
 
             $page_dir = $issueObjectPath  . DIRECTORY_SEPARATOR . $directoryNumber;
 
+            if (!empty($page_object_info['page'])) {
+                $page_title = (is_numeric($page_object_info['page']) ? 'Page ' : '') . $page_object_info['page'];
+            }
+            else {
+                $page_title = 'Page ' . $directoryNumber;
+            }
+
             // Create a directory for each day of the newspaper.
             if (!file_exists($page_dir)) {
                 mkdir($page_dir, 0777, true);
@@ -161,7 +189,7 @@ class CdmNewspapers extends Writer
             }
 
             print "Exporting files for issue " . $this->issueDate
-              . ', page ' . $directoryNumber . "\n";
+              . ', ' . $page_title . "\n";
 
             // Write out the OCR datastream.
             $OCR_expected = in_array('OCR', $this->datastreams);
@@ -176,7 +204,11 @@ class CdmNewspapers extends Writer
                     }
                 }
                 if (!$ocr_nickname_found) {
-                    throw new \Exception("Problem creating OCR.txt.  Possibly unknown Cdm nickname.");
+                    $this->log->addNotice(
+                      "CdmNewspapers writer notice",
+                      array('OCR was expected, but none found.  Possibly unknown Cdm nickname.' => array('ocr_nicknames' => $this->ocrNicknames))
+                    );
+//                    throw new \Exception("Problem creating OCR.txt.  Possibly unknown Cdm nickname.");
                 }
             }
 
@@ -248,16 +280,16 @@ class CdmNewspapers extends Writer
                 // all datastreams
                 // MODS, OBJ, OCR, JPEG, JP2
                 if (!empty($jp2_output_file_path)) {
-                    print "Source file not found. Using JP2.\n";
+                    print "Local source file not found. Using JP2.\n";
                     $obj_jp2_output_file_path = $page_dir . DIRECTORY_SEPARATOR . 'OBJ.jp2';
                     copy($jp2_output_file_path, $obj_jp2_output_file_path);
                 } elseif ($JPEG_expected) {
-                    print "Source file not found. Using JPG.\n";
+                    print "Local source file not found. Using JPG.\n";
                     $obj_jpeg_output_file_path = $page_dir . DIRECTORY_SEPARATOR . 'OBJ.jpg';
                     copy($jpg_output_file_path, $obj_jpeg_output_file_path);
                 }
                 else {
-                    print "Source file not found. Attempting to pull from ContentDM.\n";
+                    print "Local source file not found. Attempting to pull from ContentDM.\n";
                     try {
                         $temp_file_path = $this->cdmNewspapersFileGetter->cdmSingleFileGetter->getFileContent($page_pointer);
                         // Get the filename used by CONTENTdm (stored in the 'find' field)
@@ -281,7 +313,6 @@ class CdmNewspapers extends Writer
             // Write outut page level MODS.XML
             $MODS_expected = in_array('MODS', $this->datastreams);
             if ($MODS_expected xor $no_datastreams_setting_flag) {
-                $page_title = 'Page ' . $directoryNumber;
                 $this->writePageLevelMetadaFile($page_pointer, $page_title, $page_dir);
             }
         }
@@ -325,7 +356,10 @@ class CdmNewspapers extends Writer
 
         $doc = new \DomDocument('1.0');
         $doc->loadXML($metadata);
-        $nodes = $doc->getElementsByTagName('dateIssued');
+//        var_dump(array('metadata' => $metadata));
+        $issue_date_tag = !empty($this->issue_date_field) ? $this->issue_date_field : 'dateIssued';
+        $nodes = $doc->getElementsByTagName($issue_date_tag);
+
         // There may be more than one 'dateIssued' node
         // use the one with keyDate and metadataminipulator to
         // manipulate date to yyyy-mm-dd format.
@@ -392,6 +426,7 @@ class CdmNewspapers extends Writer
      */
     public function directoryNameFromPageObjectInfo($pagePtrPageTitleMap, $page_object_info)
     {
+        static $last_pagenumber = NULL;
 
         $pageptr = $page_object_info['dmrecord'];
         $pagetitle = $pagePtrPageTitleMap[$pageptr];
@@ -399,6 +434,15 @@ class CdmNewspapers extends Writer
         $regex = '%[0-9]*$%';
         preg_match($regex, $pagetitle, $matches);
         $pageNumber = ltrim($matches[0]);
+        if(empty($pageNumber)) {
+            if (empty($last_pagenumber)) {
+                $pageNumber = 0;
+            }
+            else {
+
+            }
+        }
+//        var_dump(get_defined_vars());
         return $pageNumber;
     }
 

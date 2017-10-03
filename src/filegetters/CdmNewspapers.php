@@ -98,7 +98,7 @@ class CdmNewspapers extends FileGetter
         $this->cdmSingleFileGetterSettings = $settings;
         $this->cdmSingleFileGetter = new \mik\filegetters\CdmSingleFile($this->cdmSingleFileGetterSettings);
 
-        $this->inputDirectories = $this->settings['input_directories'];
+        $this->inputDirectories = !empty($this->settings['input_directories']) ? $this->settings['input_directories'] : array();
 
         // Interate over inputDirectories to create $potentialObjFiles array.
         $potentialObjFiles = $this->getMasterFiles($this->inputDirectories, $this->allowed_file_extensions_for_OBJ);

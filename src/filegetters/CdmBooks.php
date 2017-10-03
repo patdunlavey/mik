@@ -2,6 +2,10 @@
 
 namespace mik\filegetters;
 
+use GuzzleHttp\Client;
+use mik\exceptions\MikErrorException;
+use Monolog\Logger;
+
 /**
  * File Getter Class for CONTENTdm monographs
  */
@@ -39,6 +43,12 @@ class CdmBooks extends FileGetter
     private $thumbnail;
 
     /**
+     * @var object cdmSingleFileGetter - filegetter class for
+     * getting files related to CDM single file objects.
+     */
+    public $cdmSingleFileGetter;
+
+    /**
      * Create a new CONTENTdm Fetcher Instance
      * @param array $settings configuration settings.
      */
@@ -48,7 +58,10 @@ class CdmBooks extends FileGetter
         $this->utilsUrl = $this->settings['utils_url'];
         $this->alias = $this->settings['alias'];
 
-        $this->inputDirectories = $this->settings['input_directories'];
+        $this->cdmSingleFileGetterSettings = $settings;
+        $this->cdmSingleFileGetter = new \mik\filegetters\CdmSingleFile($this->cdmSingleFileGetterSettings);
+
+        $this->inputDirectories = !empty($this->settings['input_directories']) ? $this->settings['input_directories'] : array();
 
         // interate over inputDirectories to create $potentialObjFiles array.
         $potentialObjFiles = array();
@@ -62,6 +75,31 @@ class CdmBooks extends FileGetter
         $this->OBJFilePaths = $this->determineObjItems($potentialObjFiles);
         // information and methods for thumbnail minipulation
         $this->thumbnail = new \mik\filemanipulators\ThumbnailFromCdm($settings);
+
+        if (!isset($this->settings['http_timeout'])) {
+            // Seconds.
+            $this->settings['http_timeout'] = 60;
+        }
+        // Default Mac PHP setups may use Apple's Secure Transport
+        // rather than OpenSSL, causing issues with CA verification.
+        // Allow configuration override of CA verification at users own risk.
+        if (isset($settings['SYSTEM']['verify_ca'])) {
+            if ($settings['SYSTEM']['verify_ca'] == false) {
+                $this->verifyCA = false;
+            }
+        } else {
+            $this->verifyCA = true;
+        }
+
+        // Set up logger.
+        $this->pathToLog = $settings['LOGGING']['path_to_log'];
+        $this->log = new \Monolog\Logger('CdmBooks filegetter');
+        $this->logStreamHandler = new \Monolog\Handler\StreamHandler(
+          $this->pathToLog,
+          Logger::ERROR
+        );
+        $this->log->pushHandler($this->logStreamHandler);
+
     }
 
     /**
@@ -76,6 +114,7 @@ class CdmBooks extends FileGetter
 
         $item_structure = file_get_contents($query_url);
         $item_structure = json_decode($item_structure, true);
+        $children_pointers = array();
 
         /* CONTENTdm supports hierarchical books.  "Flatten" structure of hierarchical
            source books for importing into Islandora since Islandora's Book Solution Pack
@@ -84,7 +123,6 @@ class CdmBooks extends FileGetter
         if ($item_structure['type'] == 'Monograph') {
             // flatten document structure
             // hierarchy based on nodes
-            $children_pointers = array();
             // Iterator snippet below based on
             // http://stackoverflow.com/a/1019534/850828
             // @ToDo snippet produces duplicate pointers - why?
@@ -107,7 +145,6 @@ class CdmBooks extends FileGetter
             } else {
                 return array();
             }
-            $children_pointers = array();
             foreach ($children as $child) {
                 $children_pointers[] = $child['pageptr'];
             }
@@ -124,7 +161,13 @@ class CdmBooks extends FileGetter
         // Deal on an book-by-book bassis.
 
         $key = DIRECTORY_SEPARATOR . $record_key . DIRECTORY_SEPARATOR;
-        return $this->OBJFilePaths[$key];
+        if (!empty($this->OBJFilePaths[$key])) {
+            return $this->OBJFilePaths[$key];
+        }
+        else {
+            $this->log->addWarning("CdmBooks filegetter", array('getIssueLocalFilesForOBJ' => 'No object files path found for ' . $key));
+            return array();
+        }
     }
 
     private function getBookMasterFiles($pathToBook, $allowedFileTypes = array('tiff', 'tif'))
@@ -193,14 +236,36 @@ class CdmBooks extends FileGetter
 
         $image_info = $this->thumbnail->getImageScalingInfo($page_pointer);
 
-        $scale = $thumbnail_height / $image_info['width'] * 100;
-        $new_height = round($image_info['height'] * $scale / 100);
-        $get_image_url_thumbnail = $this->utilsUrl . 'ajaxhelper/?CISOROOT=' .
-          ltrim($this->alias, '/') . '&CISOPTR=' . $page_pointer .
-          '&action=2&DMSCALE=' . $scale. '&DMWIDTH='. $thumbnail_height . 'DMHEIGHT=' . $new_height;
-        $thumbnail_content = file_get_contents($get_image_url_thumbnail);
+        if(!empty($image_info['width']) && !empty($image_info['height'])) {
+            $scale = $thumbnail_height / $image_info['width'] * 100;
+            $new_height = round($image_info['height'] * $scale / 100);
+            $get_image_url_thumbnail = $this->utilsUrl . 'ajaxhelper/?CISOROOT=' .
+              ltrim($this->alias, '/') . '&CISOPTR=' . $page_pointer .
+              '&action=2&DMSCALE=' . $scale. '&DMWIDTH='. $thumbnail_height . 'DMHEIGHT=' . $new_height;
+            $thumbnail_content = file_get_contents($get_image_url_thumbnail);
 
-        return $thumbnail_content;
+            return $thumbnail_content;
+        }
+        else {
+            $get_thumbnail_url = $this->utilsUrl .'getthumbnail/collection/' . $this->alias . '/id/' . $page_pointer;
+
+            $client = new Client();
+            try {
+                $response = $client->get(
+                  $get_thumbnail_url,
+                  ['timeout' => $this->settings['http_timeout'],
+                    'connect_timeout' => $this->settings['http_timeout'],
+                    'verify' => $this->verifyCA]
+                );
+                $content = $response->getBody();
+                return $content;
+            } catch (RequestException $e) {
+                $this->log->addError("CdmNewspapers Guzzle error", array('HTTP request error' => $e->getRequest()));
+                if ($e->hasResponse()) {
+                    $this->log->addError("CdmNewspapers Guzzle error", array('HTTP request response' => $e->getResponse()));
+                }
+            }
+        }
     }
 
     public function getPreviewJPGContent($page_pointer, $jpeg_height = 800)
@@ -209,15 +274,17 @@ class CdmBooks extends FileGetter
         // which should be 800 pixels high. The filename should be JPG.jpg.
         $image_info = $this->thumbnail->getImageScalingInfo($page_pointer);
 
-        $scale = $jpeg_height / $image_info['width'] * 100;
-        $new_height = round($image_info['height'] * $scale / 100);
-        $get_image_url_jpg = $this->utilsUrl . 'ajaxhelper/?CISOROOT='
-          . ltrim($this->alias, '/') . '&CISOPTR=' . $page_pointer
-          . '&action=2&DMSCALE=' . $scale. '&DMWIDTH=' . $jpeg_height
-          . '&DMHEIGHT=' . $new_height;
-        $jpg_content = file_get_contents($get_image_url_jpg);
+        if(!empty($image_info['width']) && !empty($image_info['height'])) {
+            $scale = $jpeg_height / $image_info['width'] * 100;
+            $new_height = round($image_info['height'] * $scale / 100);
+            $get_image_url_jpg = $this->utilsUrl . 'ajaxhelper/?CISOROOT='
+              . ltrim($this->alias, '/') . '&CISOPTR=' . $page_pointer
+              . '&action=2&DMSCALE=' . $scale . '&DMWIDTH=' . $jpeg_height
+              . '&DMHEIGHT=' . $new_height;
+            $jpg_content = file_get_contents($get_image_url_jpg);
+            return $jpg_content;
+        }
 
-        return $jpg_content;
     }
 
     public function getChildLevelFileContent($page_pointer, $page_object_info)

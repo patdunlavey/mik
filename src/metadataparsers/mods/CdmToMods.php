@@ -79,7 +79,12 @@ class CdmToMods extends Mods
             // $key is the 'nick'
             $fieldAttributes = $this->getFieldAttribute($key);
             $name = trim($fieldAttributes['name']);
-            $CONTENTdmFieldValuesArray[$name] = $value;
+            if(!empty($value)) {
+                if (is_string($value)) {
+                    $value = trim($value);
+                }
+                $CONTENTdmFieldValuesArray[$name] = $value;
+            }
         }
         return $CONTENTdmFieldValuesArray;
     }

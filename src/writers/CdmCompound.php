@@ -114,9 +114,11 @@ class CdmCompound extends Writer
                 // Get the filename used by CONTENTdm (stored in the 'find' field)
                 // so we can grab the extension.
                 $item_info = $this->fetcher->getItemInfo($child_pointer);
+              if (!(isset($item_info['code']) && $item_info['code'] == '-2') && !empty($item_info['find'])) {
                 $source_file_extension = pathinfo($item_info['find'], PATHINFO_EXTENSION);
                 $output_file_path = $childObjectPath . DIRECTORY_SEPARATOR . 'OBJ' . '.' . $source_file_extension;
                 rename($temp_file_path, $output_file_path);
+              }
             } catch (Exception $e) {
                 $this->log->addError(
                     "CdmCommpound writer error",
