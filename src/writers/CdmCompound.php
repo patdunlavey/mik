@@ -108,13 +108,14 @@ class CdmCompound extends Writer
             // We can use the CdmSingleFile filegetter class since CONTENTdm
             // compound objects are made up of single file objects.
             // $this->cdmSingleFileGetter = new CdmSingleFile($this->cdmSingleFileGetterSettings);
-            $temp_file_path = $this->cdmSingleFileGetter->getFileContent($child_pointer);
 
             try {
                 // Get the filename used by CONTENTdm (stored in the 'find' field)
                 // so we can grab the extension.
                 $item_info = $this->fetcher->getItemInfo($child_pointer);
               if (!(isset($item_info['code']) && $item_info['code'] == '-2') && !empty($item_info['find'])) {
+                $temp_file_path = $this->cdmSingleFileGetter->getFileContent($child_pointer);
+
                 $source_file_extension = pathinfo($item_info['find'], PATHINFO_EXTENSION);
                 $output_file_path = $childObjectPath . DIRECTORY_SEPARATOR . 'OBJ' . '.' . $source_file_extension;
                 rename($temp_file_path, $output_file_path);
