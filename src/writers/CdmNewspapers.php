@@ -36,6 +36,14 @@ class CdmNewspapers extends Writer
     public $issue_date_field;
 
     /**
+     * @var string $outputSubdirectoryFields - comma-separated list of xpath queries
+     * to the mods xml whose values define subdirectories of the output directory to write
+     * to. E.g. "//*[local-name()='title' and string-length(@type)=0]" will create a subdirectory
+     * based on the main title of the newspaper.
+     */
+    public $outputSubdirectoryFieldQueries = array();
+
+    /**
      * @var $alias - collection alias
      */
     public $alias;
@@ -96,6 +104,10 @@ class CdmNewspapers extends Writer
             $this->OBJ_file_extension = 'tiff';
         }
 
+        if (isset($this->settings['WRITER']['output_subdirectory_field_queries'])) {
+            $this->outputSubdirectoryFieldQueries = str_getcsv($this->settings['WRITER']['output_subdirectory_field_queries']);
+        }
+
         $metadtaClass = 'mik\\metadataparsers\\' . $settings['METADATA_PARSER']['class'];
         $this->metadataParser = new $metadtaClass($settings);
 
@@ -114,8 +126,12 @@ class CdmNewspapers extends Writer
      */
     public function writePackages($metadata, $pages, $record_key)
     {
+
+        $this->alterOutputDirectory($metadata);
+
         // Create root output folder
         $this->createOutputDirectory();
+
         $issueObjectPath = $this->createIssueDirectory($metadata, $record_key);
         $this->writeMetadataFile($metadata, $issueObjectPath);
 
@@ -340,6 +356,23 @@ class CdmNewspapers extends Writer
           // remove possible left zero padded number.
           $pageNumber = ltrim($matches[0]);
           return $pageNumber;
+    }
+
+    public function alterOutputDirectory($metadata)
+    {
+        if (!empty($this->outputSubdirectoryFieldQueries)) {
+
+            $doc = new \DomDocument('1.0');
+            $doc->loadXML($metadata);
+            $xpath = new \DOMXPath($doc);
+            foreach ($this->outputSubdirectoryFieldQueries as $query) {
+                foreach ($xpath->query($query) as $node) {
+                    if (!empty($node->nodeValue)) {
+                        $this->outputDirectory .= DIRECTORY_SEPARATOR . preg_replace("/\W/", "", $node->nodeValue);
+                    }
+                }
+            }
+        }
     }
 
     /**
