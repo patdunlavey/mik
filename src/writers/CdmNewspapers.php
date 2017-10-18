@@ -43,6 +43,8 @@ class CdmNewspapers extends Writer
      */
     public $outputSubdirectoryFieldQueries = array();
 
+    public $baseOutputDirectory;
+
     /**
      * @var $alias - collection alias
      */
@@ -76,6 +78,7 @@ class CdmNewspapers extends Writer
     public function __construct($settings)
     {
         parent::__construct($settings);
+        $this->baseOutputDirectory = $this->outputDirectory;
         $this->fetcher = new \mik\fetchers\Cdm($settings);
         $this->alias = $settings['WRITER']['alias'];
         // @Todo load manipulators someway based on those to be listed in config.
@@ -365,6 +368,7 @@ class CdmNewspapers extends Writer
             $doc = new \DomDocument('1.0');
             $doc->loadXML($metadata);
             $xpath = new \DOMXPath($doc);
+            $this->outputDirectory = $this->baseOutputDirectory;
             foreach ($this->outputSubdirectoryFieldQueries as $query) {
                 foreach ($xpath->query($query) as $node) {
                     if (!empty($node->nodeValue)) {
