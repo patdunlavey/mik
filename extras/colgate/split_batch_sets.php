@@ -38,7 +38,7 @@ $batch_sets_count = ceil(count($batch_sets) / $batch_set_size);
 echo "Split Batch Sets: Moving $packages_count ingest packages into $batch_sets_count batch sets of (no more than) $batch_set_size packages each.\n";
 
 foreach($batch_sets as $batch_set_key => $batch_set) {
-    $batch_set_dir_name = "set_" . $batch_set_key+1;
+    $batch_set_dir_name = "set_" . ($batch_set_key+1);
     foreach($batch_sets[$batch_set_key] as $src_package_key => $src_package_dir) {
         $src_package_dir_array = explode('/', $src_package_dir);
         $src_package_dir_name = array_pop($src_package_dir_array);
