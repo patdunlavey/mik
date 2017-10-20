@@ -332,7 +332,7 @@ if (isset($settings['WRITER']['shutdownhooks'])) {
   foreach ($settings['WRITER']['shutdownhooks'] as $hook) {
     $cmd = sprintf("%s %s", $hook, realpath($configPath));
     echo "Running shutdown hook # $hook" . PHP_EOL;
-    exec($cmd);
+    system($cmd);
   }
   echo PHP_EOL;
 }
