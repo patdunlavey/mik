@@ -121,6 +121,29 @@ function get_opts_prune_argv($parameters) {
 
 function write_preprocess_script($preprocess_script_args, $dest_set_dir, $config)
 {
+    if (empty($preprocess_script_args['drush_command'])) {
+        switch ($config['WRITER']['class']) {
+            case 'CdmNewspapers':
+            case 'CsvNewspapers':
+                $preprocess_script_args['drush_command'] = 'islandora_newspaper_batch_preprocess';
+                break;
+
+            case 'CsvCompound':
+            case 'CdmCompound':
+            case 'CdmPhpDocuments':
+                $preprocess_script_args['drush_command'] = 'islandora_compound_batch_preprocess';
+                break;
+
+            case 'CsvBooks':
+            case 'CdmBooks':
+            $preprocess_script_args['drush_command'] = 'islandora_book_batch_preprocess';
+                break;
+
+            default:
+                $preprocess_script_args['drush_command'] = 'islandora_batch_scan_preprocess';
+        }
+    }
+
     if (!empty($preprocess_script_args['drush_command'])) {
         $preprocess_drush_command = $preprocess_script_args['drush_command'];
         unset ($preprocess_script_args['drush_command']);
@@ -128,7 +151,7 @@ function write_preprocess_script($preprocess_script_args, $dest_set_dir, $config
         unset ($preprocess_script_args['drupal_root']);
         $immediate = empty($preprocess_script_args['immediate']) ? FALSE : TRUE;
         unset ($preprocess_script_args['immediate']);
-        $teecommand = !empty($config['LOGGING']['path_to_log']) ? " | tee " . $config['LOGGING']['path_to_log'] : '';
+        $teecommand = !empty($config['LOGGING']['path_to_log']) ? " tee " . $config['LOGGING']['path_to_log'] : '';
         $log_path = pathinfo($config['LOGGING']['path_to_log']);
         $preprocess_script_file_path = $log_path['dirname'] . "/batch_preprocess.sh";
         $preprocess_script_file_pathinfo = pathinfo($preprocess_script_file_path);
@@ -157,7 +180,7 @@ function write_preprocess_script($preprocess_script_args, $dest_set_dir, $config
                 $text .= "\n";
                 fwrite($file, $text);
                 if ($immediate) {
-                    $text = "# drush -v -u 1 islandora_batch_ingest 2>&1 $teecommand\n";
+                    $text = "# drush -v -u 1 islandora_batch_ingest 2>&1 $teecommand\n\n";
                     fwrite($file, $text);
                 }
                 fclose($file);
